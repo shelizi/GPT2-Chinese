@@ -8,10 +8,37 @@ import numpy as np
 from datetime import datetime
 from torch.nn import DataParallel
 from tqdm import tqdm
+from os import listdir
+from os.path import isfile, join
 
 '''
 如果训练材料是全部堆在一起不分篇章的话用这个文件
 '''
+
+def get_tokenization(raw_data_path, tokenized_data_path, full_tokenizer):
+    head, tail = os.path.split(raw_data_path)
+
+    if os.path.isfile(tokenized_data_path + tail):
+        with open(tokenized_data_path +tail, 'r') as f:
+            line = f.read().strip()
+        tokens = line.split()
+        single_ids = [int(token) for token in tokens]
+    else:
+        with open(raw_data_path, 'r', encoding='utf8') as f:
+            lines = f.read()
+            single = lines.replace('\n', ' [SEP] ') # 用[SEP]表示换行, 段落之间使用SEP表示段落结束
+
+
+        single_ids = full_tokenizer.convert_tokens_to_ids(full_tokenizer.tokenize(single))
+        with open(tokenized_data_path + tail, 'w') as f:
+            for id in single_ids[:-1]:
+                f.write(str(id) + ' ')
+            f.write(str(single_ids[-1]))
+            f.write('\n')
+
+
+
+    return single_ids
 
 
 def build_files(raw_data_path, tokenized_data_path, full_tokenizer, num_pieces):
@@ -41,7 +68,7 @@ def main():
     parser.add_argument('--model_config', default='config/model_config_small.json', type=str, required=False,
                         help='选择模型参数')
     parser.add_argument('--tokenizer_path', default='cache/vocab_small.txt', type=str, required=False, help='选择词库')
-    parser.add_argument('--raw_data_path', default='data/train.json', type=str, required=False, help='原始训练语料')
+    parser.add_argument('--raw_data_path', default='data/', type=str, required=False, help='原始训练语料')
     parser.add_argument('--tokenized_data_path', default='data/tokenized/', type=str, required=False,
                         help='tokenized语料存放位置')
     parser.add_argument('--raw', action='store_true', help='是否先做tokenize')
@@ -94,11 +121,13 @@ def main():
     num_pieces = args.num_pieces
     output_dir = args.output_dir
 
-    if raw:
-        print('building files')
-        build_files(raw_data_path=raw_data_path, tokenized_data_path=tokenized_data_path, full_tokenizer=full_tokenizer,
-                    num_pieces=num_pieces)
-        print('files built')
+    # if raw:
+    #     print('building files')
+    #     build_files(raw_data_path=raw_data_path, tokenized_data_path=tokenized_data_path, full_tokenizer=full_tokenizer,
+    #                 num_pieces=num_pieces)
+    #     print('files built')
+
+    raw_data_files = [join(raw_data_path, f) for f in listdir(raw_data_path) if isfile(join(raw_data_path, f))]
 
     if not args.pretrained_model:
         model = transformers.modeling_gpt2.GPT2LMHeadModel(config=model_config)
@@ -131,18 +160,18 @@ def main():
         multi_gpu = True
     print('starting training')
     running_loss = 0
+
+
+
     for epoch in range(epochs):
         print('epoch {}'.format(epoch + 1))
         now = datetime.now()
         print('time: {}'.format(now))
-        x = np.linspace(0, num_pieces - 1, num_pieces, dtype=np.int32)
-        random.shuffle(x)
+
+        random.shuffle(raw_data_files)
         piece_num = 0
-        for i in x:
-            with open(tokenized_data_path + 'tokenized_train_{}.txt'.format(i), 'r') as f:
-                line = f.read().strip()
-            tokens = line.split()
-            tokens = [int(token) for token in tokens]
+        for raw_data_file in raw_data_files:
+            tokens=get_tokenization(raw_data_file,tokenized_data_path,full_tokenizer)
             start_point = 0
             samples = []
             while start_point < len(tokens) - n_ctx:
