@@ -37,7 +37,7 @@ def get_tokenization(raw_data_path, tokenized_data_path, full_tokenizer):
             except:
                 single = None
         len_single = len(single)
-        num_pieces = 100000
+        num_pieces = int(len_single/100)
         if single is not None:
             print(tail)
             single_ids = []
@@ -79,7 +79,7 @@ def main():
     parser.add_argument('--device', default='0,1,2,3', type=str, required=False, help='设置使用哪些显卡')
     parser.add_argument('--model_config', default='config/model_config.json', type=str, required=False,
                         help='选择模型参数')
-    parser.add_argument('--tokenizer_path', default='cache/vocab_small.txt', type=str, required=False, help='选择词库')
+    parser.add_argument('--tokenizer_path', default='cache/vocab.txt', type=str, required=False, help='选择词库')
     parser.add_argument('--raw_data_path', default='data/', type=str, required=False, help='原始训练语料')
     parser.add_argument('--tokenized_data_path', default='data/tokenized/', type=str, required=False,
                         help='tokenized语料存放位置')
@@ -140,7 +140,8 @@ def main():
     #     print('files built')
 
     raw_data_files = [join(raw_data_path, f) for f in listdir(raw_data_path) if isfile(join(raw_data_path, f))]
-
+    if not os.path.exists(tokenized_data_path):
+        os.mkdir(tokenized_data_path)
     if not args.pretrained_model:
         model = transformers.modeling_gpt2.GPT2LMHeadModel(config=model_config)
     else:
@@ -233,10 +234,11 @@ def main():
                     optimizer.zero_grad()
                     # scheduler.step()
                     if (step + 1) % log_step == 0:
-                        print('now time: {}:{}. Step {} of piece {} of epoch {}, loss {}'.format(
+                        print('now time: {}:{}. Step {}/{} of piece {} of epoch {}, loss {}'.format(
                             datetime.now().hour,
                             datetime.now().minute,
                             (step + 1) // gradient_accumulation,
+                            len(samples) // batch_size//gradient_accumulation,
                             piece_num,
                             epoch + 1,
                             running_loss / log_step))
