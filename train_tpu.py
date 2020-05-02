@@ -17,7 +17,16 @@ import torch_xla
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.distributed.parallel_loader as pl
+import math
+from transformers import activations
+import gc
 
+
+def _gelu_python(x):
+    return x * 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
+
+
+activations.ACT2FN['gelu'] = _gelu_python
 '''
 如果训练材料是全部堆在一起不分篇章的话用这个文件
 '''
@@ -32,35 +41,8 @@ def get_tokenization(raw_data_path, tokenized_data_path, full_tokenizer):
     if os.path.isfile(tokenized_data_path + tail):
         with open(tokenized_data_path + tail, 'r', encoding='utf8') as f:
             line = f.read().strip()
-        tokens = line.split()
+        tokens = line.split(' ')
         single_ids = [int(token) for token in tokens]
-    else:
-        try:
-            with open(raw_data_path, 'r', encoding='utf8') as f:
-                lines = f.read()
-                single = lines.replace('\n', ' [SEP] ')  # 用[SEP]表示换行, 段落之间使用SEP表示段落结束
-        except:
-            try:
-                with open(raw_data_path, 'r', encoding='GB18030') as f:
-                    lines = f.read()
-                    single = lines.replace('\n', ' [SEP] ')  # 用[SEP]表示换行, 段落之间使用SEP表示段落结束
-
-            except:
-                single = None
-
-        if single is not None:
-            print(tail)
-            len_single = len(single)
-            num_pieces = int(len_single / 100)
-            single_ids = []
-            for i in tqdm(range(num_pieces)):
-                single_ids += full_tokenizer.convert_tokens_to_ids(
-                    full_tokenizer.tokenize(single[len_single // num_pieces * i: len_single // num_pieces * (i + 1)]))
-            with open(tokenized_data_path + tail, 'w', encoding='utf8') as f:
-                for id in single_ids[:-1]:
-                    f.write(str(id) + ' ')
-                f.write(str(single_ids[-1]))
-                f.write('\n')
 
     return single_ids
 
@@ -187,6 +169,7 @@ def main():
     #                 num_pieces=num_pieces)
     #     print('files built')
     raw_data_files = [join(raw_data_path, f) for f in listdir(raw_data_path) if isfile(join(raw_data_path, f))]
+    random.shuffle(raw_data_files)
 
     def train_model(index):
         device = xm.xla_device()
@@ -197,7 +180,8 @@ def main():
         if not args.pretrained_model:
             model = transformers.modeling_gpt2.GPT2LMHeadModel(config=model_config)
         else:
-            model = transformers.modeling_gpt2.GPT2LMHeadModel.from_pretrained(args.pretrained_model)
+            model = transformers.modeling_gpt2.GPT2LMHeadModel(config=model_config)
+            model.load_state_dict(torch.load(output_dir + 'final_model'))
         model.train()
         model.to(device)
         multi_gpu = False
@@ -222,120 +206,102 @@ def main():
         #     print("Let's use", torch.cuda.device_count(), "GPUs!")
         #     model = DataParallel(model)
         #     multi_gpu = True
-        print('starting training')
+        if xm.is_master_ordinal():
+            print('starting training')
 
+        doc_size = 10
+        raw_data_batch_len = len(raw_data_files) // doc_size
         for epoch in range(epochs):
             if xm.is_master_ordinal():
                 print('epoch {}'.format(epoch + 1))
                 now = datetime.now()
                 print('time: {}'.format(now))
-            random.shuffle(raw_data_files)
-            train_dataset = TextDataset(raw_data_files[0:1], tokenized_data_path, full_tokenizer,
-                                        n_ctx)
+            for batch_len in range(raw_data_batch_len):
+                train_dataset = TextDataset(raw_data_files[batch_len * doc_size:(batch_len + 1) * doc_size],
+                                            tokenized_data_path, full_tokenizer,
+                                            n_ctx)
 
-            train_sampler = torch.utils.data.distributed.DistributedSampler(
-                train_dataset,
-                num_replicas=xm.xrt_world_size(),
-                rank=xm.get_ordinal(),
-                shuffle=True)
+                train_sampler = torch.utils.data.distributed.DistributedSampler(
+                    train_dataset,
+                    num_replicas=xm.xrt_world_size(),
+                    rank=xm.get_ordinal(),
+                    shuffle=True)
 
-            # Creates dataloaders, which load data in batches
-            # Note: test loader is not shuffled or sampled
-            train_loader = torch.utils.data.DataLoader(
-                train_dataset,
-                batch_size=batch_size,
-                sampler=train_sampler,
-                num_workers=8,
-                drop_last=True)
+                # Creates dataloaders, which load data in batches
+                # Note: test loader is not shuffled or sampled
+                train_loader = torch.utils.data.DataLoader(
+                    train_dataset,
+                    batch_size=batch_size,
+                    sampler=train_sampler,
+                    num_workers=8,
+                    drop_last=True)
 
-            # tokens = get_tokenization(raw_data_file, tokenized_data_path, full_tokenizer)
-            # if tokens is None:
-            #     continue
-            # start_point = 0
-            # samples = []
-            # while start_point < len(tokens) - n_ctx:
-            #     samples.append(tokens[start_point: start_point + n_ctx])
-            #     start_point += stride
-            # if start_point < len(tokens):
-            #     samples.append(tokens[len(tokens) - n_ctx:])
-            # random.shuffle(samples)
-            para_train_loader = pl.ParallelLoader(train_loader, [device]).per_device_loader(device)
-            for step, batch_inputs in enumerate(para_train_loader):
+                # tokens = get_tokenization(raw_data_file, tokenized_data_path, full_tokenizer)
+                # if tokens is None:
+                #     continue
+                # start_point = 0
+                # samples = []
+                # while start_point < len(tokens) - n_ctx:
+                #     samples.append(tokens[start_point: start_point + n_ctx])
+                #     start_point += stride
+                # if start_point < len(tokens):
+                #     samples.append(tokens[len(tokens) - n_ctx:])
+                # random.shuffle(samples)
+                para_train_loader = pl.ParallelLoader(train_loader, [device]).per_device_loader(device)
+                for step, batch_inputs in enumerate(para_train_loader):
 
-                # for step in range(len(samples) // batch_size):
+                    # for step in range(len(samples) // batch_size):
 
-                #  prepare data
-                # batch = samples[step * batch_size: (step + 1) * batch_size]
-                # batch_labels = []
-                # batch_inputs = []
-                # for ids in batch:
-                #     int_ids_for_labels = [int(x) for x in ids]
-                #     int_ids_for_inputs = [int(x) for x in ids]
-                #     batch_labels.append(int_ids_for_labels)
-                #     batch_inputs.append(int_ids_for_inputs)
-                # print(batch_inputs)
-                batch_inputs = batch_inputs.to(device)
+                    #  prepare data
+                    # batch = samples[step * batch_size: (step + 1) * batch_size]
+                    # batch_labels = []
+                    # batch_inputs = []
+                    # for ids in batch:
+                    #     int_ids_for_labels = [int(x) for x in ids]
+                    #     int_ids_for_inputs = [int(x) for x in ids]
+                    #     batch_labels.append(int_ids_for_labels)
+                    #     batch_inputs.append(int_ids_for_inputs)
+                    # print(batch_inputs)
+                    batch_inputs = batch_inputs.to(device)
 
-                # print(batch_labels.size(), batch_inputs.size())
-                #  forward pass
-                outputs = model.forward(input_ids=batch_inputs, labels=batch_inputs)
-                loss, logits = outputs[:2]
+                    # print(batch_labels.size(), batch_inputs.size())
+                    #  forward pass
+                    outputs = model.forward(input_ids=batch_inputs, labels=batch_inputs)
+                    loss, logits = outputs[:2]
 
-                #  get loss
-                # if multi_gpu:
-                #     loss = loss.mean()
-                # if gradient_accumulation > 1:
-                #     loss = loss / gradient_accumulation
+                    #  get loss
+                    # if multi_gpu:
+                    #     loss = loss.mean()
+                    # if gradient_accumulation > 1:
+                    #     loss = loss / gradient_accumulation
 
-                optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
 
-                xm.optimizer_step(optimizer)
+                    xm.optimizer_step(optimizer)
 
-                # if (step + 1) % gradient_accumulation == 0:
-                #     running_loss += loss.item()
-                # optimizer.step()
-                # xm.optimizer_step(optimizer)
-                # optimizer.zero_grad()
-                # scheduler.step()
+                    # if (step + 1) % gradient_accumulation == 0:
+                    #     running_loss += loss.item()
+                    # optimizer.step()
+                    # xm.optimizer_step(optimizer)
+                    # optimizer.zero_grad()
+                    # scheduler.step()
+                    if xm.is_master_ordinal():
+                        if (step + 1) % log_step == 0:
+                            print('now time: {}:{}. Step {}/{} of epoch {}, loss {}'.format(
+                                datetime.now().hour,
+                                datetime.now().minute,
+                                (step + 1),
+                                len(para_train_loader),
+                                epoch + 1,
+                                loss.item()
+                            ))
+                xm.save(model.state_dict(), output_dir + 'final_model')
+
                 if xm.is_master_ordinal():
-                    if (step + 1) % log_step == 0:
-                        print('now time: {}:{}. Step {}/{} of epoch {}, loss {}'.format(
-                            datetime.now().hour,
-                            datetime.now().minute,
-                            (step + 1),
-                            len(para_train_loader) // batch_size,
-                            epoch + 1,
-                            loss.item()
-                        ))
+                    gc.collect()
 
-            # piece_num += 1
-            # model_to_save = model.module if hasattr(model, 'module') else model
-            # model_to_save.save_pretrained(output_dir + 'final_model')
-
-            # print('saving model for epoch {}'.format(epoch + 1))
-            # if not os.path.exists(output_dir + 'model_epoch{}'.format(epoch + 1)):
-            #     os.mkdir(output_dir + 'model_epoch{}'.format(epoch + 1))
-            # model_to_save = model.module if hasattr(model, 'module') else model
-            # model_to_save.save_pretrained(output_dir + 'model_epoch{}'.format(epoch + 1))
-            # torch.save(scheduler.state_dict(), output_dir + 'model_epoch{}/scheduler.pt'.format(epoch + 1))
-            # torch.save(optimizer.state_dict(), output_dir + 'model_epoch{}/optimizer.pt'.format(epoch + 1))
-            # print('epoch {} finished'.format(epoch + 1))
-
-            # then = datetime.now()
-            # print('time: {}'.format(then))
-            # print('time for one epoch: {}'.format(then - now))
-
-        # print('training finished')
-        # if not os.path.exists(output_dir + 'final_model'):
-        #     os.mkdir(output_dir + 'final_model')
-        # model_to_save = model.module if hasattr(model, 'module') else model
-        # model_to_save.save_pretrained(output_dir + 'final_model')
-
-    # torch.save(scheduler.state_dict(), output_dir + 'final_model/scheduler.pt')
-    # torch.save(optimizer.state_dict(), output_dir + 'final_model/optimizer.pt')
-    # train_model(0)
     xmp.spawn(train_model, args=(), nprocs=8, start_method='fork')
 
 
