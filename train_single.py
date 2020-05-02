@@ -17,26 +17,38 @@ from os.path import isfile, join
 
 def get_tokenization(raw_data_path, tokenized_data_path, full_tokenizer):
     head, tail = os.path.split(raw_data_path)
-
+    single_ids = None
     if os.path.isfile(tokenized_data_path + tail):
-        with open(tokenized_data_path +tail, 'r') as f:
+        with open(tokenized_data_path + tail, 'r') as f:
             line = f.read().strip()
         tokens = line.split()
         single_ids = [int(token) for token in tokens]
     else:
-        with open(raw_data_path, 'r', encoding='utf8') as f:
-            lines = f.read()
-            single = lines.replace('\n', ' [SEP] ') # 用[SEP]表示换行, 段落之间使用SEP表示段落结束
+        try:
+            with open(raw_data_path, 'r', encoding='utf8') as f:
+                lines = f.read()
+                single = lines.replace('\n', ' [SEP] ')  # 用[SEP]表示换行, 段落之间使用SEP表示段落结束
+        except:
+            try:
+                with open(raw_data_path, 'r', encoding='GB18030') as f:
+                    lines = f.read()
+                    single = lines.replace('\n', ' [SEP] ')  # 用[SEP]表示换行, 段落之间使用SEP表示段落结束
 
-
-        single_ids = full_tokenizer.convert_tokens_to_ids(full_tokenizer.tokenize(single))
-        with open(tokenized_data_path + tail, 'w') as f:
-            for id in single_ids[:-1]:
-                f.write(str(id) + ' ')
-            f.write(str(single_ids[-1]))
-            f.write('\n')
-
-
+            except:
+                single = None
+        len_single = len(single)
+        num_pieces = 100000
+        if single is not None:
+            print(tail)
+            single_ids = []
+            for i in tqdm(range(num_pieces)):
+                single_ids += full_tokenizer.convert_tokens_to_ids(
+                    full_tokenizer.tokenize(single[len_single // num_pieces * i: len_single // num_pieces * (i + 1)]))
+            with open(tokenized_data_path + tail, 'w') as f:
+                for id in single_ids[:-1]:
+                    f.write(str(id) + ' ')
+                f.write(str(single_ids[-1]))
+                f.write('\n')
 
     return single_ids
 
@@ -65,7 +77,7 @@ def build_files(raw_data_path, tokenized_data_path, full_tokenizer, num_pieces):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--device', default='0,1,2,3', type=str, required=False, help='设置使用哪些显卡')
-    parser.add_argument('--model_config', default='config/model_config_small.json', type=str, required=False,
+    parser.add_argument('--model_config', default='config/model_config.json', type=str, required=False,
                         help='选择模型参数')
     parser.add_argument('--tokenizer_path', default='cache/vocab_small.txt', type=str, required=False, help='选择词库')
     parser.add_argument('--raw_data_path', default='data/', type=str, required=False, help='原始训练语料')
@@ -137,16 +149,15 @@ def main():
     model.to(device)
     multi_gpu = False
     full_len = 0
-    print('calculating total steps')
-    for i in tqdm(range(num_pieces)):
-        with open(tokenized_data_path + 'tokenized_train_{}.txt'.format(i), 'r') as f:
-            full_len += len([int(item) for item in f.read().strip().split()])
-    total_steps = int(full_len / stride * epochs / batch_size / gradient_accumulation)
-    print('total steps = {}'.format(total_steps))
+    # print('calculating total steps')
+    # for i in tqdm(range(num_pieces)):
+    #     with open(tokenized_data_path + 'tokenized_train_{}.txt'.format(i), 'r') as f:
+    #         full_len += len([int(item) for item in f.read().strip().split()])
+    # total_steps = int(full_len / stride * epochs / batch_size / gradient_accumulation)
+    # print('total steps = {}'.format(total_steps))
 
     optimizer = transformers.AdamW(model.parameters(), lr=lr, correct_bias=True)
-    scheduler = transformers.WarmupLinearSchedule(optimizer, warmup_steps=warmup_steps,
-                                                          t_total=total_steps)
+    # scheduler = transformers.WarmupLinearSchedule(optimizer, warmup_steps=warmup_steps)
     if fp16:
         try:
             from apex import amp
@@ -171,14 +182,16 @@ def main():
         random.shuffle(raw_data_files)
         piece_num = 0
         for raw_data_file in raw_data_files:
-            tokens=get_tokenization(raw_data_file,tokenized_data_path,full_tokenizer)
+            tokens = get_tokenization(raw_data_file, tokenized_data_path, full_tokenizer)
+            if tokens is None:
+                continue
             start_point = 0
             samples = []
             while start_point < len(tokens) - n_ctx:
                 samples.append(tokens[start_point: start_point + n_ctx])
                 start_point += stride
             if start_point < len(tokens):
-                samples.append(tokens[len(tokens)-n_ctx:])
+                samples.append(tokens[len(tokens) - n_ctx:])
             random.shuffle(samples)
             for step in range(len(samples) // batch_size):
 
@@ -218,17 +231,19 @@ def main():
                     running_loss += loss.item()
                     optimizer.step()
                     optimizer.zero_grad()
-                    scheduler.step()
-                if (step + 1) % log_step == 0:
-                    print('now time: {}:{}. Step {} of piece {} of epoch {}, loss {}'.format(
-                        datetime.now().hour,
-                        datetime.now().minute,
-                        (step + 1) // gradient_accumulation,
-                        piece_num,
-                        epoch + 1,
-                        running_loss / log_step))
-                    running_loss = 0
+                    # scheduler.step()
+                    if (step + 1) % log_step == 0:
+                        print('now time: {}:{}. Step {} of piece {} of epoch {}, loss {}'.format(
+                            datetime.now().hour,
+                            datetime.now().minute,
+                            (step + 1) // gradient_accumulation,
+                            piece_num,
+                            epoch + 1,
+                            running_loss / log_step))
+                        running_loss = 0
             piece_num += 1
+            model_to_save = model.module if hasattr(model, 'module') else model
+            model_to_save.save_pretrained(output_dir + 'final_model')
 
         print('saving model for epoch {}'.format(epoch + 1))
         if not os.path.exists(output_dir + 'model_epoch{}'.format(epoch + 1)):
