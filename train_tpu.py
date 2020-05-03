@@ -37,12 +37,19 @@ def get_tokenization(raw_data_path, tokenized_data_path, full_tokenizer):
         os.mkdir(tokenized_data_path)
 
     head, tail = os.path.split(raw_data_path)
-    single_ids = None
+    single_ids = []
+
     if os.path.isfile(tokenized_data_path + tail):
         with open(tokenized_data_path + tail, 'r', encoding='utf8') as f:
             line = f.read().strip()
         tokens = line.split(' ')
-        single_ids = [int(token) for token in tokens]
+        single_ids = []
+        for token in tokens:
+            try:
+                single_ids.append(int(token))
+            except:
+                os.remove(tokenized_data_path + tail)
+                pass
 
     return single_ids
 
@@ -248,6 +255,7 @@ def main():
                 #     samples.append(tokens[len(tokens) - n_ctx:])
                 # random.shuffle(samples)
                 para_train_loader = pl.ParallelLoader(train_loader, [device]).per_device_loader(device)
+                running_loss=0
                 for step, batch_inputs in enumerate(para_train_loader):
 
                     # for step in range(len(samples) // batch_size):
@@ -289,14 +297,19 @@ def main():
                     # scheduler.step()
                     if xm.is_master_ordinal():
                         if (step + 1) % log_step == 0:
-                            print('now time: {}:{}. Step {}/{} of epoch {}, loss {}'.format(
+                            print('now time: {}:{}. Step {}/{} of pice {}/{} epoch {}, loss {}'.format(
                                 datetime.now().hour,
                                 datetime.now().minute,
                                 (step + 1),
                                 len(para_train_loader),
+                                batch_len + 1,
+                                raw_data_batch_len,
                                 epoch + 1,
-                                loss.item()
+                                running_loss/log_step
                             ))
+                            running_loss=0
+                        else:
+                            running_loss += loss.item()
                 xm.save(model.state_dict(), output_dir + 'final_model')
 
                 if xm.is_master_ordinal():

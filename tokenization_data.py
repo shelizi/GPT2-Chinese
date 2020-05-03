@@ -48,10 +48,11 @@ def get_tokenization(raw_data_path, tokenized_data_path, full_tokenizer):
                 single_ids += full_tokenizer.convert_tokens_to_ids(
                     full_tokenizer.tokenize(single[len_single // num_pieces * i: len_single // num_pieces * (i + 1)]))
             with open(tokenized_data_path + tail, 'w', encoding='utf8') as f:
+                write_content=''
                 for id in single_ids[:-1]:
-                    f.write(str(id) + ' ')
-                f.write(str(single_ids[-1]))
-                f.write('\n')
+                    write_content+=str(id) + ' '
+                write_content+=(str(single_ids[-1])+'\n')
+                f.write(write_content)
 
     return single_ids
 

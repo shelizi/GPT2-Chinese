@@ -98,9 +98,9 @@ def main():
     parser.add_argument('--temperature', default=1, type=float, required=False, help='生成温度，越高越随机')
     parser.add_argument('--topk', default=8, type=int, required=False, help='生成的时候最高几选一')
     parser.add_argument('--topp', default=0, type=float, required=False, help='生成的时候积累概率最高多少')
-    parser.add_argument('--model_config', default='config/model_config_small.json', type=str, required=False,
+    parser.add_argument('--model_config', default='config/model_config.json', type=str, required=False,
                         help='模型参数路径')
-    parser.add_argument('--tokenizer_path', default='cache/vocab_small.txt', type=str, required=False, help='词表路径')
+    parser.add_argument('--tokenizer_path', default='cache/vocab.txt', type=str, required=False, help='词表路径')
     parser.add_argument('--model_path', default='model/final_model', type=str, required=False, help='模型路径')
     parser.add_argument('--save_path', default='generated/', type=str, required=False, help='存放生成的文件的路径')
     parser.add_argument('--articles_per_title', default=5, type=int, required=False, help='每个标题生成多少篇文章')
@@ -136,7 +136,8 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     tokenizer = tokenization_bert.BertTokenizer(vocab_file=args.tokenizer_path)
-    model = GPT2LMHeadModel.from_pretrained(args.model_path)
+    model = GPT2LMHeadModel(config=args.model_config)
+    model.load_state_dict(torch.load(args.model_path + 'final_model'))
     model.to(device)
     model.eval()
 

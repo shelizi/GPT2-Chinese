@@ -130,9 +130,9 @@ def main():
     parser.add_argument('--temperature', default=1, type=float, required=False, help='生成温度')
     parser.add_argument('--topk', default=8, type=int, required=False, help='最高几选一')
     parser.add_argument('--topp', default=0, type=float, required=False, help='最高积累概率')
-    parser.add_argument('--model_config', default='config/model_config_small.json', type=str, required=False,
+    parser.add_argument('--model_config', default='config/model_config.json', type=str, required=False,
                         help='模型参数')
-    parser.add_argument('--tokenizer_path', default='cache/vocab_small.txt', type=str, required=False, help='词表路径')
+    parser.add_argument('--tokenizer_path', default='cache/vocab.txt', type=str, required=False, help='词表路径')
     parser.add_argument('--model_path', default='model/final_model', type=str, required=False, help='模型路径')
     parser.add_argument('--prefix', default='萧炎', type=str, required=False, help='生成文章的开头')
     parser.add_argument('--no_wordpiece', action='store_true', help='不做word piece切词')
@@ -162,7 +162,9 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     tokenizer = tokenization_bert.BertTokenizer(vocab_file=args.tokenizer_path)
-    model = GPT2LMHeadModel.from_pretrained(args.model_path)
+    # model = GPT2LMHeadModel.from_pretrained(args.model_path)
+    model = GPT2LMHeadModel(config=args.model_config)
+    model.load_state_dict(torch.load(args.model_path + 'final_model'))
     model.to(device)
     model.eval()
 
