@@ -4,7 +4,7 @@ import os
 import argparse
 from tqdm import trange
 from transformers import GPT2LMHeadModel
-
+import transformers
 
 def is_word(word):
     for item in list(word):
@@ -150,6 +150,7 @@ def main():
     else:
         from tokenizations import tokenization_bert
 
+    model_config = transformers.modeling_gpt2.GPT2Config.from_json_file(args.model_config)
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device  # 此处设置程序使用哪些显卡
     length = args.length
     batch_size = args.batch_size
@@ -163,7 +164,7 @@ def main():
 
     tokenizer = tokenization_bert.BertTokenizer(vocab_file=args.tokenizer_path)
     # model = GPT2LMHeadModel.from_pretrained(args.model_path)
-    model = GPT2LMHeadModel(config=args.model_config)
+    model = GPT2LMHeadModel(config=model_config)
     model.load_state_dict(torch.load(args.model_path + 'final_model'))
     model.to(device)
     model.eval()

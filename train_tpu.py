@@ -40,16 +40,17 @@ def get_tokenization(raw_data_path, tokenized_data_path, full_tokenizer):
     single_ids = []
 
     if os.path.isfile(tokenized_data_path + tail):
-        with open(tokenized_data_path + tail, 'r', encoding='utf8') as f:
-            line = f.read().strip()
-        tokens = line.split(' ')
-        single_ids = []
-        for token in tokens:
-            try:
-                single_ids.append(int(token))
-            except:
-                os.remove(tokenized_data_path + tail)
-                pass
+        try:
+            with open(tokenized_data_path + tail, 'r', encoding='utf8') as f:
+                line = f.read().strip()
+            tokens = line.split(' ')
+            single_ids = []
+            for token in tokens:
+                if token!='':
+                    single_ids.append(int(token))
+        except:
+            os.remove(tokenized_data_path + tail)
+            pass
 
     return single_ids
 

@@ -4,7 +4,7 @@ import os
 import argparse
 from tqdm import trange
 from transformers import GPT2LMHeadModel
-
+import transformers
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"  # 此处设置程序使用哪些显卡
 
 
@@ -118,7 +118,7 @@ def main():
         from tokenizations import tokenization_bert_word_level as tokenization_bert
     else:
         from tokenizations import tokenization_bert
-
+    model_config = transformers.modeling_gpt2.GPT2Config.from_json_file(args.model_config)
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device  # 此处设置程序使用哪些显卡
     length = args.length
     temperature = args.temperature
@@ -136,7 +136,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     tokenizer = tokenization_bert.BertTokenizer(vocab_file=args.tokenizer_path)
-    model = GPT2LMHeadModel(config=args.model_config)
+    model = GPT2LMHeadModel(config=model_config)
     model.load_state_dict(torch.load(args.model_path + 'final_model'))
     model.to(device)
     model.eval()
